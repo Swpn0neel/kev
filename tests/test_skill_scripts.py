@@ -288,11 +288,10 @@ def test_convert_json_score_edges_and_other_labels_keep_float_spelling(tmp_path,
     A noul or choice label keeps the str(float) spelling, so 1e0 is not the integer 1 and 1.0e1 is not option "10".
     """
     spec = tmp_path / "workload.json"
-    spec.write_text(json.dumps({"questions": {
-        "rating": RATING_SPEC["questions"]["rating"],
-        "flag": {"type": "noul", "instructions": "Yes?", "criteria": {"true": "yes", "false": "no"}},
-        "bucket": {"type": "choice", "instructions": "Which?", "criteria": {"10": "ten", "25": None, "billing": "money"}},
-    }}), encoding="utf-8")
+    questions = {"rating": RATING_SPEC["questions"]["rating"],
+                 "flag": {"type": "noul", "instructions": "Yes?", "criteria": {"true": "yes", "false": "no"}},
+                 "bucket": {"type": "choice", "instructions": "Which?", "criteria": {"10": "ten", "25": None, "billing": "money"}}}
+    spec.write_text(json.dumps({"questions": questions}), encoding="utf-8")
     rows = "\n".join([
         '{"body":"e0","rating":1e0,"flag":true,"bucket":"billing"}',
         '{"body":"two","rating":2e0,"flag":false,"bucket":"10"}',
