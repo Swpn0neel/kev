@@ -24,9 +24,11 @@ import urllib.error
 import urllib.request
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from decimal import Decimal
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from convert_data import json_value, loads  # noqa: E402
 from split_data import check_question, label_key, normalized_state  # noqa: E402
 
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
@@ -115,11 +117,11 @@ def parse_records(text):
     text = text.strip()
     if text.startswith("```"): text = text.split("\n", 1)[1].rsplit("```", 1)[0]
     try:
-        data = json.loads(text)
+        data = loads(text)
     except json.JSONDecodeError:
         start, end = text.find("{"), text.rfind("}")
         if start < 0 or end < 0: return []
-        try: data = json.loads(text[start:end + 1])
+        try: data = loads(text[start:end + 1])
         except json.JSONDecodeError: return []
     records = data.get("records") if isinstance(data, dict) else data
     return records if isinstance(records, list) else []
@@ -133,6 +135,10 @@ def coerce_label(q, value):
     if q["type"] == "score":
         if isinstance(value, str) and value.strip().lstrip("-").isdigit(): return int(value)
         if isinstance(value, float) and value.is_integer(): return int(value)
+        # Decimal, not float: float("0.99999999999999999") is 1.0. Range before int(), as in convert_data.map_label.
+        if isinstance(value, Decimal):
+            if value.is_finite() and value == value.to_integral_value() and -1 < value < len(q["criteria"]): return int(value)
+            return str(value)
         return value
     if isinstance(value, str) and value not in q["criteria"]:
         matches = [k for k in q["criteria"] if k.casefold() == value.strip().casefold()]
@@ -152,7 +158,7 @@ def to_record(spec, item):
         problems = check_question(qid, labelled)
         if problems: return None, problems[0]
         questions[qid] = labelled
-    return {"state": item["state"], "questions": questions}, None
+    return {"state": json_value(item["state"]), "questions": questions}, None
 
 
 def load_spec(path):

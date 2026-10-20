@@ -24,13 +24,26 @@ from split_data import check_question  # noqa: E402
 TRUE, FALSE = {"true", "t", "yes", "y", "1", "on"}, {"false", "f", "no", "n", "0", "off"}
 
 
+def loads(text):
+    """JSON text whose numbers stay Decimal. float rounds 0.99999999999999999 to 1.0."""
+    return json.loads(text, parse_float=Decimal)
+
+
+def json_value(value):
+    """A Decimal from loads back to float, so a non-score field is ordinary JSON."""
+    if isinstance(value, Decimal): return float(value)
+    if isinstance(value, list): return [json_value(v) for v in value]
+    if isinstance(value, dict): return {k: json_value(v) for k, v in value.items()}
+    return value
+
+
 def rows_from(path):
     path = Path(path)
     if path.suffix.lower() in (".jsonl", ".ndjson"):
         for line in path.read_text(encoding="utf-8").splitlines():
-            if line.strip(): yield json.loads(line)
+            if line.strip(): yield loads(line)
     elif path.suffix.lower() == ".json":
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = loads(path.read_text(encoding="utf-8"))
         yield from (data if isinstance(data, list) else data.get("rows") or data.get("data") or [])
     else:
         with path.open(encoding="utf-8", newline="") as f:
@@ -105,7 +118,7 @@ def main():
     with out.open("w", encoding="utf-8", newline="\n") as f:
         for n, row in enumerate(rows_from(a.data), 1):
             if a.limit and n > a.limit: break
-            values = {c: get(row, c) for c in state_cols}
+            values = {c: json_value(get(row, c)) for c in state_cols}
             if all(v in (None, "") for v in values.values()): skipped["empty state"] += 1; continue
             state = str(values[state_cols[0]]) if len(state_cols) == 1 else {c: v for c, v in values.items() if v not in (None, "")}
             record = {"state": state, "questions": {}}
