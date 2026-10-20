@@ -28,7 +28,7 @@ from decimal import Decimal
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from convert_data import json_value, loads  # noqa: E402
+from convert_data import json_value, loads, map_label  # noqa: E402
 from split_data import check_question, label_key, normalized_state  # noqa: E402
 
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
@@ -131,19 +131,20 @@ def coerce_label(q, value):
     if q["type"] == "noul":
         if isinstance(value, bool): return value
         if isinstance(value, str) and value.lower() in ("true", "false"): return value.lower() == "true"
-        return value
+        return json_value(value)
     if q["type"] == "score":
         if isinstance(value, str) and value.strip().lstrip("-").isdigit(): return int(value)
         if isinstance(value, float) and value.is_integer(): return int(value)
-        # Decimal, not float: float("0.99999999999999999") is 1.0. Range before int(), as in convert_data.map_label.
+        # JSON scores are Decimal. map_label keeps the fraction and checks the range before int(),
+        # so 1e9999999 is not expanded into a multi-million-digit integer.
         if isinstance(value, Decimal):
-            if value.is_finite() and value == value.to_integral_value() and -1 < value < len(q["criteria"]): return int(value)
-            return str(value)
+            label, reason = map_label(q, value, {}, 0)
+            return str(value) if reason else label
         return value
     if isinstance(value, str) and value not in q["criteria"]:
         matches = [k for k in q["criteria"] if k.casefold() == value.strip().casefold()]
         return matches[0] if len(matches) == 1 else value
-    return value
+    return json_value(value)
 
 
 def to_record(spec, item):
