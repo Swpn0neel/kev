@@ -21,7 +21,7 @@ from .checkpoint import Checkpoint, Meta, write_meta
 from .device import DEVICE_HELP, DEVICES, allocated_bytes, empty_cache, select, sync
 from .data import EVAL_ONLY, build, augment, load_records, materialize, none_pair, source_seed
 from .suite import SYNTHETIC_SOURCES, digest, load_split, read_json, read_manifest, validate_training, write_json
-from .model import MAX_BRANCH, MAX_PACKED, MAX_STATE, MAX_TRAIN_STATE, DecisionModel, encode, fits, load_tokenizer, rows_of, training_context, user_tokens
+from .model import MAX_STATE, MAX_TRAIN_STATE, DecisionModel, admitting_max_state, fits, load_tokenizer, rows_of, training_context, user_tokens
 
 
 # --- losses -----------------------------------------------------------------------------------------------------------
@@ -137,38 +137,28 @@ def training_requests(a, tok, manifest, holdout):
     return reqs, dropped
 
 
-def admitting_max_state(tok, rec):
-    """The smallest --max_state whose training context admits the internal record `rec` (kev.model.fits), or None when no
-    training context does. The state, the longest row (state plus one question's branch) and the packed record each
-    overflow the default limits by some amount, and training_context lifts all three by the same amount, so the largest
-    overflow is the lift the record needs."""
-    c = training_context(MAX_TRAIN_STATE)
-    try:
-        enc = encode(tok, rec, max_state=c["max_state"], max_branch=c["max_branch"], strict=True)
-    except ValueError:
-        return None
-    if len(enc["ids"]) > c["max_packed"]: return None
-    state, branches = shape(enc)
-    return MAX_STATE + max(0, state - MAX_STATE, state + max(branches, default=0) - MAX_BRANCH, len(enc["ids"]) - MAX_PACKED)
-
-
 def drop_report(tok, dropped, total):
-    """What the training-context filter dropped, as the record training_config.json keeps and the rest of the drop line:
-    how many of how many, the first ids, the smallest --max_state that keeps every dropped record some training context
-    admits (None when none does), and how many records no training context admits. The line names the record that sets
-    the --max_state, so a detached run shows which record it lost and what would have kept it (issue #155)."""
-    needs = [(admitting_max_state(tok, materialize(r)), str(r["_meta"].get("id", i)), r) for i, r in enumerate(dropped)]
-    fit = [n for n in needs if n[0] is not None]
-    over = len(needs) - len(fit)
-    report = {"count": len(dropped), "of": total, "ids": [name for _, name, _ in needs[:20]],
-              "max_state": max(need for need, _, _ in fit) if fit else None, "over_any_context": over}
+    """What the context filter dropped: the `dropped` object training_config.json keeps, and the rest of the drop line.
+    The object carries the count, the first ids, the smallest --max_state that admits every dropped record some training
+    context admits (None when none does), the record and limit that set it (state, row or packed, from
+    kev.model.admitting_max_state), and how many records no training context admits. The line keeps the `dropped` head
+    kev-finetune forwards, and names that record, so a detached run shows what it lost and what would have kept it (#155)."""
+    ranked = [(admitting_max_state(tok, materialize(r)), r["_meta"]["id"]) for r in dropped]
+    fit = [item for item in ranked if item[0] is not None]
+    over = len(ranked) - len(fit)
+    report = {"count": len(dropped), "of": total, "ids": [name for _, name in ranked[:20]],
+              "max_state": None, "over_any_context": over}
     ceiling = f"({MAX_TRAIN_STATE:,} state tokens at most)"
     if not fit:
         return report, f"none fits any training context {ceiling}"
-    need, name, rec = max(fit, key=lambda n: n[0])
-    state = 1 + len(user_tokens(tok, materialize(rec)["state"]))
-    hint = f"--max_state {need} keeps {f'{len(fit)} of them' if over else 'them'} (the longest, {name}, has {state} state tokens)"
-    return report, hint + (f"; {over} record(s) fit no training context {ceiling}" if over else "")
+    (need, limit, tokens), name = max(fit, key=lambda item: item[0][0])
+    report["max_state"], report["limit_id"], report["limit"], report["limit_tokens"] = need, name, limit, tokens
+    detail = {"state": f"{name} has {tokens} state tokens", "row": f"{name} has a row of {tokens} tokens",
+              "packed": f"{name} has {tokens} packed tokens"}[limit]
+    keeps = "them" if over == 0 else f"{len(fit)} of them"
+    hint = f"--max_state {need} keeps {keeps} ({detail})"
+    if over: hint += f"; {over} {'record fits' if over == 1 else 'records fit'} no training context {ceiling}"
+    return report, hint
 
 
 @dataclass(eq=False)   # identity, so batch.index(v) finds this very variant
